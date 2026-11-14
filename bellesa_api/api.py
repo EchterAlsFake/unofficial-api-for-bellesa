@@ -146,6 +146,7 @@ class Video(BaseMedia):
     pornstars: list[str] | None = media_field("api", "html")
     pornstars_urls: list[str] | None = media_field("api", "html")
     channel_urls: list[str] | None = media_field("api", "html")
+    content_providers: list[dict] | None = media_field("api", "html")
     author: str | None = media_field("api", "html")
     author_link: str | None = media_field("api", "html")
     advertised_qualities: list[int] | None = media_field("api", "html")

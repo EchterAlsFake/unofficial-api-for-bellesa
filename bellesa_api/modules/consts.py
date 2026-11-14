@@ -127,6 +127,7 @@ def video_fields(data: dict, expected_id: str) -> dict:
         "pornstars": [p["name"] for p in performers],
         "pornstars_urls": [f"{HOST}/performers/{p['handle']}" for p in performers],
         "channel_urls": [f"{HOST}/channels/{p['handle']}" for p in providers],
+        "content_providers": [{"name": p["name"], "url": f"{HOST}/channels/{p['handle']}"} for p in providers],
         "author": providers[0]["name"] if providers else None,
         "author_link": f"{HOST}/channels/{providers[0]['handle']}"
         if providers
