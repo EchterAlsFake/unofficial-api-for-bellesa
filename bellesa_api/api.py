@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from base_api import paginated_stream, PageInfo, validate_pagination
+from base_api.modules.pagination import linked_page
+
 import argparse
 import asyncio
 import re
@@ -63,64 +66,32 @@ def _endpoint(path: str, **params) -> str:
     return consts.API + path + ("?" + urlencode(params) if params else "")
 
 
-def _listing[MediaT: BaseMedia](
-    core: BaseCore,
-    url: str,
-    cls: type[MediaT],
-    kind: str,
-    *,
-    pages: PageCount = 1,
-    start_page: int = 1,
-    iterator_config: IteratorConfig | None = None,
-) -> ScrapeStream[MediaT]:
-    if (
-        isinstance(start_page, bool)
-        or not isinstance(start_page, int)
-        or start_page < 1
-    ):
-        raise ValueError("start_page must be a positive integer")
-    if pages != "all" and (
-        isinstance(pages, bool) or not isinstance(pages, int) or pages < 1
-    ):
-        raise ValueError('pages must be a positive integer or "all"')
-
-    # Request one listing header to bound pages=all, including exact page-size multiples.
-    # Helper owns all page/item scheduling, retries, loading, ordering, and cleanup.
-    async def generate():
-        response = await core.request(update_url_query(url, page=start_page))
-        data = response.json()
-        if not isinstance(data, list):
-            raise ValueError("Expected a JSON listing array")
-        if not data:
-            return
-        try:
-            last_page = int(response.headers["x-pagination-pages-total"])
-            actual_page = int(response.headers["x-pagination-page"])
-        except (KeyError, TypeError, ValueError) as error:
-            raise ValueError("Missing or invalid Bellesa pagination headers") from error
-        if actual_page != start_page:
-            raise ValueError("Bellesa returned a different page than requested")
-        end = last_page if pages == "all" else min(last_page, start_page + pages - 1)
-        urls = [update_url_query(url, page=p) for p in range(start_page, end + 1)]
-        config = (
-            iterator_config
-            if iterator_config is not None
-            else IteratorConfig(
-                order=ResultOrder.ORIGINAL,
-                page_error_mode=ErrorMode.RAISE,
-                item_error_mode=ErrorMode.RAISE,
-                load_specific_sources=("api",),
-            )
+def _listing(core, url, cls, kind, *, pages=1, start_page=1, iterator_config=None):
+    def info(content, page, rows):
+        headers = content.headers
+        return PageInfo(
+            current_page=int(headers["x-pagination-page"]),
+            total_pages=int(headers["x-pagination-pages-total"]),
+            terminal=not rows,
         )
-        async with Helper(core=core, constructor=cls).iterator(
-            target_page_urls=urls,
-            item_extractor=partial(consts.listing_items, kind=kind),
-            iterator_config=config,
-        ) as stream:
-            async for result in stream:
-                yield result
 
-    return ScrapeStream(generate())
+    return paginated_stream(
+        core=core,
+        constructor=cls,
+        page_url=lambda page: update_url_query(url, page=page),
+        item_extractor=partial(consts.listing_items, kind=kind),
+        page_info=info,
+        pages=pages,
+        start_page=start_page,
+        iterator_config=iterator_config
+        if iterator_config is not None
+        else IteratorConfig(
+            order=ResultOrder.ORIGINAL,
+            page_error_mode=ErrorMode.RAISE,
+            item_error_mode=ErrorMode.RAISE,
+            load_specific_sources=("api",),
+        ),
+    )
 
 
 @dataclass(slots=True, kw_only=True, repr=False)
@@ -289,6 +260,8 @@ class Video(BaseMedia):
         start_page: int = 1,
         iterator_config: IteratorConfig | None = None,
     ) -> ScrapeStream[Video]:
+        validate_pagination(pages, start_page)
+
         async def generate():
             await self.load_fields("author_link")
             if not self.author_link:
@@ -348,6 +321,7 @@ class Channel(BaseMedia):
         start_page: int = 1,
         iterator_config: IteratorConfig | None = None,
     ) -> ScrapeStream[Video]:
+        validate_pagination(pages, start_page)
         url = _endpoint(
             "/videos",
             **{
@@ -412,6 +386,7 @@ class Performer(BaseMedia):
         start_page: int = 1,
         iterator_config: IteratorConfig | None = None,
     ) -> ScrapeStream[Video]:
+        validate_pagination(pages, start_page)
         url = _endpoint(
             "/videos",
             **{
@@ -466,6 +441,7 @@ class Category(BaseMedia):
         start_page: int = 1,
         iterator_config: IteratorConfig | None = None,
     ) -> ScrapeStream[Video]:
+        validate_pagination(pages, start_page)
         return Client(self.core).get_videos(
             categories=[consts.identity(self.url, "category")],
             sort=sort,
@@ -542,6 +518,7 @@ class Client:
         start_page: int = 1,
         iterator_config: IteratorConfig | None = None,
     ) -> ScrapeStream[Video]:
+        validate_pagination(pages, start_page)
         params = {"filter[source]": "bellesa", "limit": 24, **_sort_query(sort)}
         for name, values in (
             ("categories", categories),
@@ -590,6 +567,7 @@ class Client:
         start_page: int = 1,
         iterator_config: IteratorConfig | None = None,
     ) -> ScrapeStream[Performer]:
+        validate_pagination(pages, start_page)
         if gender not in {"female", "male", "all"}:
             raise ValueError("gender must be female, male, or all")
         params = {"filter[source]": "bellesa", "limit": 12, "order[videos]": "DESC"}
@@ -615,6 +593,7 @@ class Client:
         start_page: int = 1,
         iterator_config: IteratorConfig | None = None,
     ) -> ScrapeStream[Video | Performer | Channel]:
+        validate_pagination(pages, start_page)
         if not isinstance(query, str) or len(query.strip()) < 3:
             raise ValueError("Bellesa search requires at least three characters")
         routes = {
