@@ -6,3 +6,4 @@ dist/
 *.mp4
 *.ts
 .idea/
+uv.lock
